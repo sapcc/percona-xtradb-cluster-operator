@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"os"
+	"strconv"
 
 	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
@@ -60,9 +62,31 @@ func (c *Node) Name() string {
 }
 
 func (c *Node) InitContainers(cr *api.PerconaXtraDBCluster, initImageName string) []corev1.Container {
+	inits := nodeInitContainers(cr, initImageName)
+
+	var ccFixPermissions bool
+	if value, exists := os.LookupEnv("CC_FIX_PERMISSIONS"); exists {
+		var err error
+		ccFixPermissions, err = strconv.ParseBool(value)
+		if err != nil {
+			ccFixPermissions = false
+		}
+	} else {
+		ccFixPermissions = false
+	}
+
+	if ccFixPermissions {
+		inits = append([]corev1.Container{PermissionsInitContainer(cr, initImageName, app.DataVolumeName)}, inits...)
+	}
+
+	return inits
+}
+
+func nodeInitContainers(cr *api.PerconaXtraDBCluster, initImageName string) []corev1.Container {
 	inits := []corev1.Container{
 		EntrypointInitContainer(cr, initImageName, app.DataVolumeName),
 	}
+
 	return inits
 }
 
