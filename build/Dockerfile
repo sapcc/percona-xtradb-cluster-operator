@@ -1,4 +1,4 @@
-FROM --platform=${BUILDPLATFORM} golang:1.22 AS go_builder
+FROM --platform=linux/amd64 golang:1.22 AS go_builder
 WORKDIR /go/src/github.com/percona/percona-xtradb-cluster-operator
 
 COPY go.mod go.sum ./
@@ -36,14 +36,15 @@ RUN find $GOPATH/pkg/mod -regextype posix-extended -iregex '.*(license|notice)(\
             sh -c 'mkdir -pv /licenses/$(echo "$0" | sed -E "s/\/(license|notice).*$//gi") \
                    && cp -v "$0" /licenses/$(echo "$0" | sed -E "s/\/(license|notice).*$//gi")' {} \;
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal AS ubi9
+FROM --platform=linux/amd64 registry.access.redhat.com/ubi9/ubi-minimal AS ubi9
 RUN microdnf -y update && microdnf clean all
 
 LABEL name="Percona XtraDB Cluster Operator" \
       vendor="Percona" \
       summary="Percona XtraDB Cluster is an active/active high availability and high scalability open source solution for MySQL clustering" \
       description="Percona XtraDB Cluster is a high availability solution that helps enterprises avoid downtime and outages and meet expected customer experience." \
-      maintainer="Percona Development <info@percona.com>"
+      maintainer="Percona Development <info@percona.com>" \
+      source_repository="https://github.com/percona/percona-xtradb-cluster-operator/"
 
 COPY LICENSE /licenses/
 COPY --from=go_builder /usr/local/bin/percona-xtradb-cluster-operator /usr/local/bin/percona-xtradb-cluster-operator
