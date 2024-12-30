@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -65,12 +66,14 @@ func init() {
 }
 
 type Collector struct {
-	db              *pxc.PXC
-	storage         storage.Storage
-	lastUploadedSet pxc.GTIDSet // last uploaded binary logs set
-	pxcServiceName  string      // k8s service name for PXC, its for get correct host for connection
-	pxcUser         string      // user for connection to PXC
-	pxcPass         string      // password for connection to PXC
+	db                 *pxc.PXC
+	storage            storage.Storage
+	lastUploadedSet    pxc.GTIDSet // last uploaded binary logs set
+	pxcServiceName     string      // k8s service name for PXC, its for get correct host for connection
+	pxcUser            string      // user for connection to PXC
+	pxcPass            string      // password for connection to PXC
+	retentionDays      int         // retention period for binary logs files
+	cleanupIntervalMin int         // cleanup interval in minutes
 }
 
 type Config struct {
@@ -87,19 +90,23 @@ type Config struct {
 }
 
 type BackupS3 struct {
-	Endpoint    string `env:"ENDPOINT" envDefault:"s3.amazonaws.com"`
-	AccessKeyID string `env:"ACCESS_KEY_ID,required"`
-	AccessKey   string `env:"SECRET_ACCESS_KEY,required"`
-	BucketURL   string `env:"S3_BUCKET_URL,required"`
-	Region      string `env:"DEFAULT_REGION,required"`
+	Endpoint           string `env:"ENDPOINT" envDefault:"s3.amazonaws.com"`
+	AccessKeyID        string `env:"ACCESS_KEY_ID,required"`
+	AccessKey          string `env:"SECRET_ACCESS_KEY,required"`
+	BucketURL          string `env:"S3_BUCKET_URL,required"`
+	Region             string `env:"DEFAULT_REGION,required"`
+	RetentionDays      int    `env:"BINLOG_RETENTION_DAYS" envDefault:"14"`
+	CleanupIntervalMin int    `env:"CLEANUP_INTERVAL_MIN" envDefault:"60"`
 }
 
 type BackupAzure struct {
-	Endpoint      string `env:"AZURE_ENDPOINT,required"`
-	ContainerPath string `env:"AZURE_CONTAINER_PATH,required"`
-	StorageClass  string `env:"AZURE_STORAGE_CLASS"`
-	AccountName   string `env:"AZURE_STORAGE_ACCOUNT,required"`
-	AccountKey    string `env:"AZURE_ACCESS_KEY,required"`
+	Endpoint           string `env:"AZURE_ENDPOINT,required"`
+	ContainerPath      string `env:"AZURE_CONTAINER_PATH,required"`
+	StorageClass       string `env:"AZURE_STORAGE_CLASS"`
+	AccountName        string `env:"AZURE_STORAGE_ACCOUNT,required"`
+	AccountKey         string `env:"AZURE_ACCESS_KEY,required"`
+	RetentionDays      int    `env:"BINLOG_RETENTION_DAYS" envDefault:"14"`
+	CleanupIntervalMin int    `env:"CLEANUP_INTERVAL_MIN" envDefault:"60"`
 }
 
 const (
@@ -632,4 +639,54 @@ func readBinlog(file *os.File, pipe *io.PipeWriter, errBuf *bytes.Buffer, binlog
 	// no error handling because Close() always return nil error
 	// nolint:errcheck
 	pipe.Close()
+}
+
+func (c *Collector) CleanupOldBinlogs(ctx context.Context, retentionDays int) error {
+	if retentionDays <= 0 {
+		return nil
+	}
+
+	cutoffTime := time.Now().AddDate(0, 0, -retentionDays)
+
+	objects, err := c.storage.ListObjects(ctx, "binlog_")
+	log.Printf("Found %d objects in storage %s with prefix %s", len(objects), c.storage.GetPrefix(), "binlog_")
+	if err != nil {
+		return errors.Wrapf(err, "list objects in storage %s", c.storage.GetPrefix())
+	}
+
+	for _, obj := range objects {
+		if strings.HasSuffix(obj, "-gtid-set") {
+			continue
+		}
+
+		// Parse timestamp from binlog name (format: binlog_<timestamp>_<hash>)
+		parts := strings.Split(obj, "_")
+		if len(parts) < 2 {
+			log.Printf("WARNING: Skipping cleanup of binlog with invalid name format: %s", obj)
+			continue
+		}
+
+		binlogTime, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			log.Printf("WARNING: Failed to parse timestamp from binlog name %s: %v", obj, err)
+			continue
+		}
+
+		binlogDate := time.Unix(binlogTime, 0)
+		if binlogDate.Before(cutoffTime) {
+			if err := c.storage.DeleteObject(ctx, obj); err != nil {
+				log.Printf("WARNING: Failed to delete old binlog %s: %v", obj, err)
+				continue
+			}
+
+			gtidSetFile := obj + "-gtid-set"
+			if err := c.storage.DeleteObject(ctx, gtidSetFile); err != nil {
+				log.Printf("WARNING: Failed to delete GTID set file %s: %v", gtidSetFile, err)
+			}
+
+			log.Printf("Deleted old binlog backup: %s", obj)
+		}
+	}
+
+	return nil
 }
