@@ -202,7 +202,7 @@ func (c *Collector) newDB(ctx context.Context) error {
 	}
 	c.pxcPass = string(pxcPass)
 
-	host, err := pxc.GetPXCOldestBinlogHost(ctx, c.pxcServiceName, c.pxcUser, c.pxcPass)
+	host, err := pxc.GetPXCFirstHost(ctx, c.pxcServiceName)
 	if err != nil {
 		return errors.Wrap(err, "get host")
 	}
