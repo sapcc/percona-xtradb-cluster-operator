@@ -252,7 +252,7 @@ func (c *Collector) lastGTIDSet(ctx context.Context, suffix string) (pxc.GTIDSet
 }
 
 func (c *Collector) newDB(ctx context.Context) error {
-	host, err := pxc.GetPXCOldestBinlogHost(ctx, c.pxcServiceName, c.pxcUser, c.pxcPass)
+	host, err := pxc.GetPXCFirstHost(ctx, c.pxcServiceName)
 	if err != nil {
 		return errors.Wrap(err, "get host")
 	}
