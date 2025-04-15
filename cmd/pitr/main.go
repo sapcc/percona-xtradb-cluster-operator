@@ -130,6 +130,10 @@ func runCollector(ctx context.Context) {
 		log.Fatalln("ERROR: init collector:", err)
 	}
 
+	cleanupCtx, cleanupCancel := context.WithCancel(ctx)
+	defer cleanupCancel()
+	go runCleanup(cleanupCtx, c, config)
+
 	log.Println("running binlog collector")
 	for {
 		timeout, cancel := context.WithTimeout(ctx, time.Duration(config.TimeoutSeconds)*time.Second)
@@ -146,6 +150,42 @@ func runCollector(ctx context.Context) {
 			log.Fatalln("ERROR:", ctx.Err().Error())
 		case <-t.C:
 			break
+		}
+	}
+}
+
+func runCleanup(ctx context.Context, c *collector.Collector, config collector.Config) {
+	var retentionDays, cleanupIntervalMin int
+	switch config.StorageType {
+	case "s3":
+		retentionDays = config.BackupStorageS3.RetentionDays
+		cleanupIntervalMin = config.BackupStorageS3.CleanupIntervalMin
+	case "azure":
+		retentionDays = config.BackupStorageAzure.RetentionDays
+		cleanupIntervalMin = config.BackupStorageAzure.CleanupIntervalMin
+	default:
+		log.Printf("WARNING: unknown storage type for cleanup: %s", config.StorageType)
+		return
+	}
+
+	ticker := time.NewTicker(time.Duration(cleanupIntervalMin) * time.Minute)
+	defer ticker.Stop()
+
+	// Run first cleanup immediately
+	if err := c.CleanupOldBinlogs(ctx, retentionDays); err != nil {
+		log.Printf("WARNING: Failed to cleanup old binlogs: %v", err)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			log.Printf("Starting scheduled binlog cleanup (retention: %d days, interval: %d minutes)",
+				retentionDays, cleanupIntervalMin)
+			if err := c.CleanupOldBinlogs(ctx, retentionDays); err != nil {
+				log.Printf("WARNING: Failed to cleanup old binlogs: %v", err)
+			}
 		}
 	}
 }
