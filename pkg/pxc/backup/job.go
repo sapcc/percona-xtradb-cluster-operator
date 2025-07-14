@@ -137,6 +137,20 @@ func (bcp *Backup) JobSpec(spec api.PXCBackupSpec, cluster *api.PerconaXtraDBClu
 						Env:             envs,
 						Resources:       storage.Resources,
 						VolumeMounts:    volumeMounts,
+						Ports: []corev1.ContainerPort{
+							{
+								ContainerPort: 4444,
+								Name:          "sst",
+							},
+							{
+								ContainerPort: 4567,
+								Name:          "write-set",
+							},
+							{
+								ContainerPort: 4568,
+								Name:          "ist",
+							},
+						},
 					},
 				},
 				Affinity:                  storage.Affinity,
